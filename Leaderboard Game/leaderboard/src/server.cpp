@@ -1,12 +1,3 @@
-// ============================================================
-// SERVER — Leaderboard Game (POSIX / Linux / WSL)
-// Fitur:
-//   - Multi-client via Multithreading (BONUS)
-//   - Operasi: ADD, GET, FIND_SCORE, FIND_NAME, QUIT
-//   - Data interchange JSON
-// Kompilasi: g++ server.cpp -o server -pthread
-// ============================================================
-
 #include <iostream>
 #include <string>
 #include <sstream>
@@ -14,32 +5,22 @@
 #include <thread>
 #include <mutex>
 
-// POSIX socket headers (pengganti winsock2.h)
+// POSIX socket headers
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 
-#include "../include/Leaderboard.h"
+#include "include/Leaderboard.h"
 
 #define PORT        8080
 #define BUFFER_SIZE 4096
 
-// ============================================================
-// BONUS MULTITHREADING: mutex untuk proteksi shared leaderboard
-// ============================================================
+//proteksi leaderboard pake multithreading
+
 Leaderboard globalBoard;
 std::mutex   boardMutex;
 
-// ------------------------------------------------------------
-// Handler satu client — dijalankan di thread terpisah
-// Protocol:
-//   ADD <json>        -> tambah player
-//   GET               -> ambil leaderboard JSON
-//   FIND_SCORE <n>    -> cari by skor
-//   FIND_NAME <name>  -> cari by username
-//   QUIT              -> tutup koneksi
-// ------------------------------------------------------------
 void handleClient(int clientSock, std::string clientIP) {
     std::cout << "[SERVER] Client terhubung: " << clientIP << "\n";
     char buffer[BUFFER_SIZE];
@@ -50,7 +31,6 @@ void handleClient(int clientSock, std::string clientIP) {
         if (bytesRead <= 0) break;
 
         std::string request(buffer);
-        // Trim \r\n
         while (!request.empty() &&
                (request.back() == '\n' || request.back() == '\r'))
             request.pop_back();
@@ -62,6 +42,8 @@ void handleClient(int clientSock, std::string clientIP) {
             std::lock_guard<std::mutex> lock(boardMutex);
             bool ok = globalBoard.addFromJSON(json);
             globalBoard.sortAndRank();
+            // SAVE otomatis setiap kali ada player baru
+            if (ok) globalBoard.saveToFile();
             response = ok
                 ? "{\"status\":\"OK\",\"message\":\"Player added\"}"
                 : "{\"status\":\"ERROR\",\"message\":\"Invalid JSON\"}";
@@ -98,7 +80,7 @@ void handleClient(int clientSock, std::string clientIP) {
                   << response.substr(0, 60) << "\n";
     }
 
-    close(clientSock);   // POSIX: close(), bukan closesocket()
+    close(clientSock);
     std::cout << "[SERVER] Client putus: " << clientIP << "\n";
 }
 
@@ -109,7 +91,6 @@ int main() {
         return 1;
     }
 
-    // Reuse address
     int opt = 1;
     setsockopt(serverSock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -126,17 +107,26 @@ int main() {
 
     listen(serverSock, 10);
     std::cout << "[SERVER] Leaderboard Server berjalan di port " << PORT << "\n";
-    std::cout << "[SERVER] Menunggu koneksi client...\n";
 
-    // Seed data awal
+    // LOAD data dari file saat server nyala
     {
-        globalBoard.addPlayer(new RegisteredPlayer("Alice",   9500,  "alice@game.com",   42));
-        globalBoard.addPlayer(new RegisteredPlayer("Bob",     3200,  "bob@game.com",     18));
-        globalBoard.addPlayer(new RegisteredPlayer("Charlie", 12000, "charlie@game.com", 75));
-        globalBoard.addPlayer(new RegisteredPlayer("Diana",   7800,  "diana@game.com",   55));
-        globalBoard.addPlayer(new RegisteredPlayer("Eve",     500,   "eve@game.com",      5));
-        globalBoard.sortAndRank();
+        std::lock_guard<std::mutex> lock(boardMutex);
+        globalBoard.loadFromFile();
+
+        // Seed data awal hanya jika file tidak ada / kosong
+        if (globalBoard.size() == 0) {
+            std::cout << "[SERVER] Menggunakan seed data awal.\n";
+            globalBoard.addPlayer(new RegisteredPlayer("Alice",   9500,  "alice@game.com",   42));
+            globalBoard.addPlayer(new RegisteredPlayer("Bob",     3200,  "bob@game.com",     18));
+            globalBoard.addPlayer(new RegisteredPlayer("Charlie", 12000, "charlie@game.com", 75));
+            globalBoard.addPlayer(new RegisteredPlayer("Diana",   7800,  "diana@game.com",   55));
+            globalBoard.addPlayer(new RegisteredPlayer("Eve",     500,   "eve@game.com",      5));
+            globalBoard.sortAndRank();
+            globalBoard.saveToFile();
+        }
     }
+
+    std::cout << "[SERVER] Menunggu koneksi client...\n";
 
     while (true) {
         sockaddr_in clientAddr{};
@@ -145,8 +135,6 @@ int main() {
         if (clientSock < 0) continue;
 
         std::string clientIP(inet_ntoa(clientAddr.sin_addr));
-
-        // BONUS MULTITHREADING: tiap client = thread baru
         std::thread t(handleClient, clientSock, clientIP);
         t.detach();
     }
