@@ -3,17 +3,19 @@
 
 #include "LinkedList.h"
 #include "Algorithms.h"
+#include "../include/json.hpp"
 #include <iostream>
 #include <sstream>
+#include <fstream>
 
-// ============================================================
-// Leaderboard: mengelola daftar pemain, sorting, searching
-// ============================================================
+using json = nlohmann::json;
+
 class Leaderboard {
 private:
     LinkedList list;
+    std::string saveFile = "data.json";
 
-    // Helper: ambil semua player ke array sementara
+    // ambil semua player ke array sementara
     RegisteredPlayer** toArray(int& size) const {
         size = list.size();
         RegisteredPlayer** arr = new RegisteredPlayer*[size];
@@ -26,7 +28,7 @@ public:
         list.append(p);
     }
 
-    // Sort dan perbarui rank — O(n log n)
+    // Sort dan perbarui rank â€” O(n log n)
     void sortAndRank() {
         int size;
         RegisteredPlayer** arr = toArray(size);
@@ -41,7 +43,7 @@ public:
         delete[] arr;
     }
 
-    // Cari berdasarkan skor — O(log n) setelah sort
+    // cari berdasarkan skor setelahsort
     RegisteredPlayer* findByScore(int score) {
         int size;
         RegisteredPlayer** arr = toArray(size);
@@ -51,7 +53,7 @@ public:
         return result;
     }
 
-    // Cari berdasarkan username — O(n)
+    // cari berdasarkan username 
     RegisteredPlayer* findByUsername(const std::string& name) {
         int size;
         RegisteredPlayer** arr = toArray(size);
@@ -61,18 +63,18 @@ public:
         return result;
     }
 
-    // Cetak semua pemain ke stdout
+    // cetak semua pemain ke stdout
     void display() const {
         std::cout << "\n===== LEADERBOARD =====\n";
         Node* curr = list.getHead();
         while (curr) {
-            curr->data->displayInfo(); // POLIMORFISME: virtual dispatch
+            curr->data->displayInfo();
             curr = curr->next;
         }
         std::cout << "=======================\n";
     }
 
-    // Serialize seluruh leaderboard ke JSON string
+    // serialize seluruh leaderboard ke JSON string
     std::string toJSON() const {
         std::ostringstream oss;
         oss << "{\"leaderboard\":[";
@@ -80,7 +82,7 @@ public:
         bool first = true;
         while (curr) {
             if (!first) oss << ",";
-            oss << curr->data->toJSON(); // POLIMORFISME: virtual toJSON()
+            oss << curr->data->toJSON();
             first = false;
             curr = curr->next;
         }
@@ -88,21 +90,78 @@ public:
         return oss.str();
     }
 
-    // Parse JSON sederhana dan tambah player
-    // Format: {"username":"x","score":100,"email":"x@x.com","gamesPlayed":5}
-    bool addFromJSON(const std::string& json) {
+   //simpan semua player ke data.json
+   
+    void saveToFile() const {
+        json j;
+        j["leaderboard"] = json::array();
+
+        Node* curr = list.getHead();
+        while (curr) {
+            RegisteredPlayer* p = curr->data;
+            j["leaderboard"].push_back({
+                {"username",    p->getUsername()},
+                {"score",       p->getScore()},
+                {"email",       p->getEmail()},
+                {"gamesPlayed", p->getGamesPlayed()}
+            });
+            curr = curr->next;
+        }
+
+        std::ofstream file(saveFile);
+        if (file.is_open()) {
+            file << j.dump(2);
+            file.close();
+            std::cout << "[SERVER] Data disimpan ke " << saveFile << "\n";
+        } else {
+            std::cerr << "[SERVER] Gagal menyimpan ke " << saveFile << "\n";
+        }
+    }
+
+// baca data json saat pertama kali running file
+
+    void loadFromFile() {
+        std::ifstream file(saveFile);
+        if (!file.is_open()) {
+            std::cout << "[SERVER] Tidak ada " << saveFile << ", mulai dari kosong.\n";
+            return;
+        }
+
+        try {
+            json j;
+            file >> j;
+            file.close();
+
+            for (auto& item : j["leaderboard"]) {
+                std::string uname = item["username"];
+                int score         = item["score"];
+                std::string email = item["email"];
+                int games         = item["gamesPlayed"];
+                addPlayer(new RegisteredPlayer(uname, score, email, games));
+            }
+
+            sortAndRank();
+            std::cout << "[SERVER] Data dimuat dari " << saveFile
+                      << " (" << size() << " player)\n";
+        } catch (...) {
+            std::cerr << "[SERVER] Gagal membaca " << saveFile << "\n";
+        }
+    }
+
+    // parse JSON sederhana dan tambah player
+    bool addFromJSON(const std::string& jsonStr) {
         auto extract = [&](const std::string& key) -> std::string {
             std::string search = "\"" + key + "\":";
-            size_t pos = json.find(search);
+            size_t pos = jsonStr.find(search);
             if (pos == std::string::npos) return "";
             pos += search.size();
-            if (json[pos] == '"') {
+            if (jsonStr[pos] == '"') {
                 pos++;
-                size_t end = json.find('"', pos);
-                return json.substr(pos, end - pos);
+                size_t end = jsonStr.find('"', pos);
+                return jsonStr.substr(pos, end - pos);
             } else {
-                size_t end = json.find_first_of(",}", pos);
-                return json.substr(pos, end - pos);
+                size_t end = jsonStr.find_first_of(",}", pos);
+                return jsonStr.substr(pos, end - pos);
             }
         };
 
